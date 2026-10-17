@@ -1,0 +1,9 @@
+package umrao.generated;
+
+import umrao.std.Message;
+
+public class MessageImpl implements Message {
+    public void showMessage() {
+        System.out.println("Message from MessageImpl class that is runtime generated, compiled and class loaded.");
+    }
+}

@@ -1,0 +1,198 @@
+package umrao.compile.engine;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import umrao.compile.api.CompilationDiagnostic;
+import umrao.compile.api.CompilationException;
+import umrao.compile.api.CompilationResult;
+import umrao.compile.api.DynamicCompiler;
+import umrao.compile.cache.CompilationCache;
+import umrao.compile.cache.LruCompilationCache;
+import umrao.compile.security.CodeSecurityValidator;
+import umrao.compile.security.SecurityPolicy;
+
+import javax.tools.DiagnosticCollector;
+import javax.tools.JavaCompiler;
+import javax.tools.JavaFileObject;
+import javax.tools.StandardJavaFileManager;
+import javax.tools.ToolProvider;
+import java.io.File;
+import java.io.IOException;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+/**
+ * Enterprise production-grade implementation of DynamicCompiler backed by standard javax.tools.JavaCompiler.
+ * Compiles Java classes completely in RAM with zero disk I/O, security validation, and thread-safe caching.
+ */
+public class InMemoryCompiler implements DynamicCompiler {
+
+    private static final Logger log = LoggerFactory.getLogger(InMemoryCompiler.class);
+
+    private final JavaCompiler compiler;
+    private final SecurityPolicy securityPolicy;
+    private final CodeSecurityValidator securityValidator;
+    private final CompilationCache cache;
+
+    public InMemoryCompiler() {
+        this(SecurityPolicy.permissive(), null, null);
+    }
+
+    public InMemoryCompiler(SecurityPolicy securityPolicy, CompilationCache cache, ClassLoader parentClassLoader) {
+        this.compiler = ToolProvider.getSystemJavaCompiler();
+        if (this.compiler == null) {
+            throw new IllegalStateException("System Java Compiler not found. Ensure RuntimeCompile is executed on a JDK, not a JRE.");
+        }
+        this.securityPolicy = securityPolicy != null ? securityPolicy : SecurityPolicy.permissive();
+        this.securityValidator = new CodeSecurityValidator(this.securityPolicy);
+        this.cache = cache != null ? cache : new LruCompilationCache();
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public <T> CompilationResult<T> compile(String fullClassName, String sourceCode, Class<T> targetType) {
+        if (fullClassName == null || fullClassName.isBlank()) {
+            throw new IllegalArgumentException("Target class name must not be blank.");
+        }
+        if (sourceCode == null || sourceCode.isBlank()) {
+            throw new IllegalArgumentException("Source code must not be blank.");
+        }
+
+        // 1. Enforce AST / lexical security policy rules
+        securityValidator.validate(sourceCode);
+
+        // 2. Check thread-safe LRU compilation cache
+        String cacheKey = LruCompilationCache.computeKey(fullClassName, sourceCode);
+        Optional<CompilationResult<T>> cached = cache.get(cacheKey, targetType);
+        if (cached.isPresent()) {
+            log.debug("Cache hit for class {} (key={})", fullClassName, cacheKey);
+            return cached.get();
+        }
+
+        long startTime = System.currentTimeMillis();
+
+        // 3. Set up in-memory source and file manager
+        DiagnosticCollector<JavaFileObject> diagnosticCollector = new DiagnosticCollector<>();
+        StandardJavaFileManager standardFileManager = compiler.getStandardFileManager(diagnosticCollector, null, null);
+
+        try (InMemoryFileManager inMemoryFileManager = new InMemoryFileManager(standardFileManager)) {
+            SourceJavaFileObject sourceObject = new SourceJavaFileObject(fullClassName, sourceCode);
+
+            // 4. Build compiler options with dynamically resolved classpath
+            List<String> options = buildCompilerOptions(targetType);
+
+            // 5. Execute compilation task
+            JavaCompiler.CompilationTask task = compiler.getTask(
+                    null,
+                    inMemoryFileManager,
+                    diagnosticCollector,
+                    options,
+                    null,
+                    List.of(sourceObject)
+            );
+
+            boolean success = Boolean.TRUE.equals(task.call());
+            long duration = System.currentTimeMillis() - startTime;
+
+            List<CompilationDiagnostic> diagnostics = diagnosticCollector.getDiagnostics().stream()
+                    .map(CompilationDiagnostic::from)
+                    .collect(Collectors.toList());
+
+            if (!success) {
+                log.warn("In-memory compilation failed for {} with {} diagnostics", fullClassName, diagnostics.size());
+                throw new CompilationException("Compilation failed for class " + fullClassName, diagnostics);
+            }
+
+            // 6. Collect generated bytecodes and load into isolated classloader
+            Map<String, BytecodeJavaFileObject> generated = inMemoryFileManager.getBytecodes();
+            Map<String, byte[]> bytecodeMap = new HashMap<>();
+            for (Map.Entry<String, BytecodeJavaFileObject> entry : generated.entrySet()) {
+                bytecodeMap.put(entry.getKey(), inMemoryFileManager.getBytecode(entry.getKey()));
+            }
+
+            ClassLoader parentLoader = targetType.getClassLoader() != null
+                    ? targetType.getClassLoader()
+                    : Thread.currentThread().getContextClassLoader();
+
+            MemoryClassLoader classLoader = new MemoryClassLoader(parentLoader, bytecodeMap);
+
+            try {
+                Class<?> rawClass = classLoader.loadClass(fullClassName);
+
+                if (!targetType.isAssignableFrom(rawClass)) {
+                    throw new CompilationException(
+                            String.format("Compiled class %s does not implement or extend expected type %s",
+                                    fullClassName, targetType.getName()),
+                            diagnostics
+                    );
+                }
+
+                Class<? extends T> typedClass = (Class<? extends T>) rawClass;
+                CompilationResult<T> successResult = CompilationResult.success(typedClass, diagnostics, duration, false);
+
+                // Cache successful result
+                cache.put(cacheKey, successResult);
+                log.debug("Compiled {} successfully in {}ms", fullClassName, duration);
+
+                return successResult;
+            } catch (ClassNotFoundException e) {
+                log.error("Failed to load compiled class from memory: {}", fullClassName, e);
+                throw new CompilationException("Failed to load compiled class from memory: " + fullClassName, e);
+            }
+        } catch (IOException e) {
+            log.error("I/O error during in-memory compilation", e);
+            throw new CompilationException("I/O error during in-memory compilation", e);
+        }
+    }
+
+    @Override
+    public CompilationResult<Object> compile(String fullClassName, String sourceCode) {
+        return compile(fullClassName, sourceCode, Object.class);
+    }
+
+    @Override
+    public void clearCache() {
+        cache.invalidateAll();
+    }
+
+    private List<String> buildCompilerOptions(Class<?> targetType) {
+        List<String> options = new ArrayList<>();
+        options.add("-encoding");
+        options.add("UTF-8");
+
+        Set<String> cpElements = new LinkedHashSet<>();
+
+        // Add target classloader URLs if URLClassLoader
+        ClassLoader cl = targetType.getClassLoader();
+        while (cl != null) {
+            if (cl instanceof URLClassLoader urlClassLoader) {
+                for (URL url : urlClassLoader.getURLs()) {
+                    cpElements.add(new File(url.getFile()).getAbsolutePath());
+                }
+            }
+            cl = cl.getParent();
+        }
+
+        // Add standard java.class.path
+        String javaClassPath = System.getProperty("java.class.path");
+        if (javaClassPath != null && !javaClassPath.isBlank()) {
+            Collections.addAll(cpElements, javaClassPath.split(File.pathSeparator));
+        }
+
+        if (!cpElements.isEmpty()) {
+            options.add("-classpath");
+            options.add(String.join(File.pathSeparator, cpElements));
+        }
+
+        return options;
+    }
+}
