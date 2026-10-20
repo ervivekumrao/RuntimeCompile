@@ -48,6 +48,11 @@ class JitFrameworksTest {
                 new Object[]{10, 3}
         );
         assertThat(mathResult).isEqualTo(35);
+
+        // Test bytecode generation
+        Map<String, byte[]> bytecodes = janino.compileToBytecodes("umrao.generated.JaninoTest", code);
+        assertThat(bytecodes).containsKey("umrao.generated.JaninoTest");
+        assertThat(bytecodes.get("umrao.generated.JaninoTest")).isNotEmpty();
     }
 
     @Test
@@ -78,7 +83,7 @@ class JitFrameworksTest {
     }
 
     @Test
-    @DisplayName("Groovy: Should compile static JIT script implementing Message interface")
+    @DisplayName("Groovy: Should compile static JIT script implementing Message interface and bytecodes")
     void testGroovyJitCompiler() {
         GroovyJitCompiler groovy = new GroovyJitCompiler();
         String script = """
@@ -95,6 +100,11 @@ class JitFrameworksTest {
         Message msg = groovy.compileAndInstantiate(script, Message.class);
         assertThat(msg).isNotNull();
         msg.showMessage();
+
+        // Test bytecode generation
+        Map<String, byte[]> bytecodes = groovy.compileToBytecodes("umrao.generated.GroovyTest", script);
+        assertThat(bytecodes).containsKey("umrao.generated.GroovyTest");
+        assertThat(bytecodes.get("umrao.generated.GroovyTest")).isNotEmpty();
     }
 
     @Test

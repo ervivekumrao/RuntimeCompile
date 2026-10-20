@@ -1,0 +1,44 @@
+[versions]
+bytebuddy = "1.14.18"
+janino = "3.1.12"
+javassist = "3.30.2-GA"
+groovy = "4.0.22"
+mvel = "2.5.2.Final"
+jedis = "5.1.2"
+h2 = "2.2.224"
+postgresql = "42.7.14"
+slf4j = "2.0.13"
+logback = "1.6.5"
+junit = "5.10.3"
+assertj = "3.27.7"
+mockito = "5.12.0"
+awaitility = "4.2.1"
+
+[libraries]
+bytebuddy-core = { module = "net.bytebuddy:byte-buddy", version.ref = "bytebuddy" }
+bytebuddy-agent = { module = "net.bytebuddy:byte-buddy-agent", version.ref = "bytebuddy" }
+
+janino = { module = "org.codehaus.janino:janino", version.ref = "janino" }
+janino-compiler = { module = "org.codehaus.janino:commons-compiler", version.ref = "janino" }
+
+javassist = { module = "org.javassist:javassist", version.ref = "javassist" }
+
+groovy-core = { module = "org.apache.groovy:groovy", version.ref = "groovy" }
+groovy-jsr223 = { module = "org.apache.groovy:groovy-jsr223", version.ref = "groovy" }
+
+mvel = { module = "org.mvel:mvel2", version.ref = "mvel" }
+
+jedis = { module = "redis.clients:jedis", version.ref = "jedis" }
+h2 = { module = "com.h2database:h2", version.ref = "h2" }
+postgresql = { module = "org.postgresql:postgresql", version.ref = "postgresql" }
+
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
+junit-jupiter-params = { module = "org.junit.jupiter:junit-jupiter-params", version.ref = "junit" }
+assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+mockito-core = { module = "org.mockito:mockito-core", version.ref = "mockito" }
+mockito-junit-jupiter = { module = "org.mockito:mockito-junit-jupiter", version.ref = "mockito" }
+awaitility = { module = "org.awaitility:awaitility", version.ref = "awaitility" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }

@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: docker.io/library/postgres:15
+    container_name: compiler-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bytecode_db
+      POSTGRES_USER: compiler_user
+      POSTGRES_PASSWORD: compiler_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U compiler_user -d bytecode_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: docker.io/library/redis:7.2-alpine
+    container_name: compiler-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  compiler-service:
+    image: localhost/runtime-compile:latest
+    build:
+      context: ../..
+      dockerfile: deploy/containers/Dockerfile
+    container_name: runtime-compiler-service
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      SERVER_PORT: 8080
+      COMPILER_SERVICE: "true"
+      STORAGE_DIR: /var/data/compiler/classes
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      DB_URL: jdbc:postgresql://postgres:5432/bytecode_db
+      DB_USER: compiler_user
+      DB_PASSWORD: compiler_pass
+    ports:
+      - "8080:8080"
+    volumes:
+      - compiler_classes:/var/data/compiler/classes
+
+volumes:
+  compiler_classes:
+    driver: local
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
